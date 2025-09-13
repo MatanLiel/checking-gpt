@@ -1,0 +1,22 @@
+{
+  "name": "mamaz-ai-venom-bot",
+  "version": "1.0.0",
+  "description": "Mamaz AI WhatsApp bot using venom-bot",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "nodemon bot.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.0",
+    "undici": "^6.19.8",
+    "venom-bot": "^5.0.25"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
