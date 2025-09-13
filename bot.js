@@ -284,13 +284,22 @@ app.get('/qr-view', (_req, res) => {
           const r = await fetch('/qr.png?ts=' + Date.now(), {cache:'no-store'});
           const imgEl = document.getElementById('img');
           if (r.ok) {
-            imgEl.src = '/qr.png?ts=' + Date.now();
-            imgEl.style.display = 'block';
+            // Create a new image to ensure proper loading
+            const newImg = new Image();
+            newImg.onload = function() {
+              imgEl.src = this.src;
+              document.getElementById('qr-container').style.display = 'flex';
+            };
+            newImg.onerror = function() {
+              document.getElementById('qr-container').style.display = 'none';
+            };
+            newImg.src = '/qr.png?ts=' + Date.now();
           } else {
-            imgEl.style.display = 'none';
+            document.getElementById('qr-container').style.display = 'none';
           }
         } catch(e) {
           console.error('QR fetch failed:', e);
+          document.getElementById('qr-container').style.display = 'none';
         }
       }
     }
