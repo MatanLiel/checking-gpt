@@ -172,7 +172,7 @@ if (!DISABLE_VENOM) {
       '--disable-gpu'
     ],
     puppeteerOptions: { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined },
-    qrCallback: (base64Qr, _ascii, attempts) => {
+    catchQR: (base64Qr, _ascii, attempts) => {
       console.log('📱 QR generated. attempt=', attempts);
       qrCodeData = base64Qr;
       connectionStatus = 'qr_ready';
