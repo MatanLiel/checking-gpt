@@ -1,25 +1,30 @@
-FROM node:18
+# Dockerfile
+FROM node:18-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium \
-    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
-    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
-    libgbm1 libpango-1.0-0 libasound2 fonts-liberation ca-certificates \
+  chromium \
+  ca-certificates fonts-liberation \
+  libasound2 libatk1.0-0 libatk-bridge2.0-0 libc6 libcairo2 libcups2 \
+  libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libglib2.0-0 libgtk-3-0 \
+  libnss3 libnspr4 libpango-1.0-0 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 \
+  libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 \
+  libxshmfence1 xdg-utils \
   && rm -rf /var/lib/apt/lists/*
 
-ENV NODE_ENV=production
-ENV PUPPETEER_SKIP_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV NODE_ENV=production \
+    PUPPETEER_SKIP_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    CHROME_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm ci --omit=dev || npm install --omit=dev
 
 COPY . .
-
-RUN mkdir -p /app/tokens /app/logs
+RUN mkdir -p /app/tokens /app/logs && chown -R node:node /app
+USER node
 
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD ["node", "bot.js"]
