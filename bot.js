@@ -1,5 +1,24 @@
 // ===== Production-ready WhatsApp bot (Express + Venom) - Fixed Version =====
 
+
+// --- fix for Node18 where global File may be missing (needed by cheerio's undici) ---
+if (typeof globalThis.File === 'undefined') {
+  globalThis.File = class File {}; // minimal stub is enough for module load
+}
+if (typeof globalThis.Blob === 'undefined') {
+  globalThis.Blob = require('buffer').Blob; // safe fallback
+}
+// (optional, only if you later see FormData errors)
+// if (typeof globalThis.FormData === 'undefined') {
+//   globalThis.FormData = class FormData {};
+// }
+
+// now your existing requires:
+const express = require('express');
+const cors = require('cors');
+const venom = require('venom-bot');
+
+
 // Use native fetch (Node 18+). Fallback to node-fetch only if missing.
 if (typeof globalThis.fetch === 'undefined') {
   globalThis.fetch = (...args) =>
