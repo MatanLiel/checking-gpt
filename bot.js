@@ -1,4 +1,4 @@
-// ===== Production-ready WhatsApp bot (Express + Venom) - Clean Fixed Version =====
+// ===== Production-ready WhatsApp bot (Express + Venom) - Fixed Version =====
 
 // Use native fetch (Node 18+). Fallback to node-fetch only if missing.
 if (typeof globalThis.fetch === 'undefined') {
@@ -9,8 +9,6 @@ if (typeof globalThis.fetch === 'undefined') {
 const express = require('express');
 const cors = require('cors');
 const venom = require('venom-bot');
-const fs = require('fs');
-const path = require('path');
 
 // ---------- Config (from ENV) ----------
 const BUSINESS_PHONE = process.env.BUSINESS_PHONE;
@@ -69,12 +67,7 @@ const processedMessages = new Set();
 const MESSAGE_CACHE_SIZE = 1000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
-// Request rate limiting
-const requestCounts = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const RATE_LIMIT_MAX = 60; // 60 requests per minute
-
-// ---------- Utility Functions ----------
+// ---------- Helpers ----------
 function toRawBase64(maybeDataUrl) {
   if (!maybeDataUrl) return null;
   const i = maybeDataUrl.indexOf('base64,');
@@ -102,15 +95,6 @@ function safeExtractText(message) {
   return message.body.trim().slice(0, 1000); // Limit message length
 }
 
-function cleanMessageCache() {
-  if (processedMessages.size > MESSAGE_CACHE_SIZE) {
-    const entries = Array.from(processedMessages);
-    processedMessages.clear();
-    entries.slice(-MESSAGE_CACHE_SIZE / 2).forEach(entry => processedMessages.add(entry));
-    console.log('Message cache cleaned');
-  }
-}
-
 function scheduleReconnect() {
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     console.error('Max reconnection attempts reached');
@@ -127,12 +111,26 @@ function scheduleReconnect() {
   }, delay);
 }
 
-// ---------- HTTP Server Setup ----------
+// Clean message cache to prevent memory leaks
+function cleanMessageCache() {
+  if (processedMessages.size > MESSAGE_CACHE_SIZE) {
+    const entries = Array.from(processedMessages);
+    processedMessages.clear();
+    entries.slice(-MESSAGE_CACHE_SIZE / 2).forEach(entry => processedMessages.add(entry));
+    console.log('Message cache cleaned');
+  }
+}
+
+// ---------- HTTP Server ----------
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-// Rate limiting middleware
+// Basic rate limiting middleware
+const requestCounts = new Map();
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const RATE_LIMIT_MAX = 60; // 60 requests per minute
+
 app.use((req, res, next) => {
   const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
   const now = Date.now();
@@ -154,7 +152,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---------- API Endpoints ----------
 // Health & status
 app.get('/', (_req, res) => res.json({ ok: true, message: 'Bot is alive' }));
 
@@ -180,104 +177,24 @@ app.get('/status', (_req, res) => {
   });
 });
 
-// Debug endpoint
-app.get('/debug', (_req, res) => {
-  const sessionPath = path.join(__dirname, 'tokens', SESSION_NAME);
-  
-  res.json({
-    status: connectionStatus,
-    isReady,
-    hasQR: !!qrBase64,
-    lastError,
-    reconnectAttempts,
-    sessionName: SESSION_NAME,
-    sessionExists: fs.existsSync(sessionPath),
-    processedMessagesCount: processedMessages.size,
-    environment: {
-      nodeVersion: process.version,
-      platform: process.platform,
-      businessPhone: BUSINESS_PHONE,
-      headless: HEADLESS,
-      disableVenom: DISABLE_VENOM
-    },
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Session cleanup endpoint
-app.post('/reset-session', (_req, res) => {
-  if (DISABLE_VENOM) {
-    return res.json({ error: 'Venom is disabled' });
-  }
-  
-  try {
-    // Close existing client
-    if (botClient) {
-      botClient.close().catch(() => {});
-    }
-    
-    // Reset state
-    botClient = null;
-    isReady = false;
-    qrBase64 = null;
-    connectionStatus = 'disconnected';
-    lastError = null;
-    reconnectAttempts = 0;
-    processedMessages.clear();
-    
-    // Try to delete session files (this might fail, that's ok)
-    const sessionPath = path.join(__dirname, 'tokens', SESSION_NAME);
-    
-    if (fs.existsSync(sessionPath)) {
-      fs.rmSync(sessionPath, { recursive: true, force: true });
-      console.log('Session files deleted');
-    }
-    
-    // Restart Venom after a delay
-    setTimeout(() => {
-      initializeVenom();
-    }, 2000);
-    
-    res.json({ 
-      success: true, 
-      message: 'Session reset, restarting in 2 seconds...' 
-    });
-  } catch (e) {
-    console.error('Session reset failed:', e);
-    res.status(500).json({ error: 'Reset failed: ' + e.message });
-  }
-});
-
 // QR as JSON (base64 + data URL)
 app.get('/qr', (_req, res) => {
   if (!qrBase64) return res.status(404).json({ error: 'No QR code available' });
   res.json({ base64: qrBase64, dataUrl: 'data:image/png;base64,' + qrBase64 });
 });
 
-// QR as a clean PNG with enhanced quality for crisp edges
+// QR as a clean PNG
 app.get('/qr.png', (_req, res) => {
   if (!qrBase64) return res.status(404).send('No QR code available');
-  
-  try {
-    const buf = Buffer.from(qrBase64, 'base64');
-    
-    // Set headers for optimal image delivery
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    res.setHeader('Content-Length', buf.length);
-    res.setHeader('Content-Transfer-Encoding', 'binary');
-    res.setHeader('Accept-Ranges', 'bytes');
-    
-    res.send(buf);
-  } catch (e) {
-    console.error('QR PNG generation error:', e);
-    res.status(500).send('QR generation failed');
-  }
+  const buf = Buffer.from(qrBase64, 'base64');
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.send(buf);
 });
 
-// QR viewer page with enhanced UI and controls
+// Fixed QR viewer page with proper cleanup
 app.get('/qr-view', (_req, res) => {
   res.type('html').send(`
 <!doctype html>
@@ -285,77 +202,20 @@ app.get('/qr-view', (_req, res) => {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>WhatsApp QR</title>
 <style>
-  body{font-family:system-ui,Arial;margin:0;padding:24px;background:#f9fafb;min-height:100vh;display:flex;align-items:center;justify-content:center}
-  .container{max-width:500px;width:100%;padding:32px;background:white;border-radius:12px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1)}
-  .qr-container{display:flex;justify-content:center;align-items:center;margin:24px 0;padding:24px;background:#000000;border-radius:20px;box-shadow:0 8px 24px rgba(0,0,0,0.2);max-width:448px;margin-left:auto;margin-right:auto}
-  #img{
-    width:400px;
-    height:400px;
-    border:none;
-    object-fit:contain;
-    image-rendering:-moz-crisp-edges;
-    image-rendering:-webkit-optimize-contrast;
-    image-rendering:-webkit-crisp-edges;
-    image-rendering:pixelated;
-    image-rendering:crisp-edges;
-    image-rendering:optimize-contrast;
-    -ms-interpolation-mode:nearest-neighbor;
-    display:block;
-    background:white;
-    margin:0;
-    padding:12px;
-    border-radius:8px;
-    transform:rotate(180deg);
-    image-orientation:from-image;
-    max-width:400px;
-    max-height:400px;
-    min-width:400px;
-    min-height:400px
-  }
-  #status{margin:16px 0;padding:16px;background:#f3f4f6;border-radius:8px;text-align:center;color:#374151;font-weight:500}
-  .connected{background:#d1fae5;color:#065f46;border:1px solid #a7f3d0}
-  .error{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
-  .waiting{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
-  .qr-controls{display:none;text-align:center;margin:16px 0}
-  .qr-controls button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-size:14px;margin:0 4px;transition:all 0.2s}
-  .btn-primary{background:#3b82f6;color:white}
-  .btn-primary:hover{background:#2563eb}
-  .btn-danger{background:#ef4444;color:white}
-  .btn-danger:hover{background:#dc2626}
-  pre{background:#f6f8fa;border:1px solid #e5e7eb;padding:12px;border-radius:8px;max-width:100%;overflow:auto;font-size:11px;line-height:1.4}
-  .refresh-info{font-size:13px;color:#6b7280;text-align:center;margin-top:16px;opacity:0.8}
-  h1{text-align:center;color:#1f2937;margin:0 0 24px 0;font-size:24px}
-  .instructions{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;padding:12px;border-radius:8px;margin:16px 0;font-size:14px;text-align:center;display:none}
+  body{font-family:system-ui,Arial;margin:24px;background:#f9fafb}
+  .container{max-width:500px;margin:0 auto;padding:20px;background:white;border-radius:12px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1)}
+  #img{width:300px;height:300px;border:2px solid #e5e7eb;border-radius:8px;object-fit:contain;image-rendering:pixelated;display:block;margin:0 auto}
+  #status{margin:16px 0;padding:12px;background:#f3f4f6;border-radius:8px;text-align:center;color:#374151}
+  .connected{background:#d1fae5;color:#065f46}
+  .error{background:#fee2e2;color:#991b1b}
+  pre{background:#f6f8fa;border:1px solid #e5e7eb;padding:12px;border-radius:8px;max-width:100%;overflow:auto;font-size:12px}
+  .refresh-info{font-size:14px;color:#6b7280;text-align:center;margin-top:16px}
 </style>
 </head><body>
   <div class="container">
-    <h1>WhatsApp Bot Setup</h1>
+    <h1>WhatsApp Bot Status</h1>
     <div id="status">Initializing...</div>
-    
-    <div class="qr-container" id="qr-container" style="display:none;">
-      <img id="img" alt="QR Code will appear here"/>
-    </div>
-    
-    <div class="qr-controls" id="qr-controls">
-      <button onclick="rotateQR()" class="btn-primary">
-        🔄 Rotate QR Code
-      </button>
-      <button onclick="resetSession()" class="btn-danger">
-        🔥 Reset Session
-      </button>
-      <div style="font-size:12px;color:#6b7280;margin-top:8px;">
-        Rotate if tilted • Reset if "couldn't connect device" error
-      </div>
-    </div>
-    
-    <div class="instructions" id="instructions">
-      📱 <strong>How to connect:</strong><br>
-      1. Open WhatsApp on your phone<br>
-      2. Go to Settings → Linked Devices<br>
-      3. Tap "Link a Device"<br>
-      4. Scan the QR code above
-    </div>
-    
+    <img id="img" alt="QR will appear here" style="display:none;"/>
     <pre id="meta"></pre>
     <div class="refresh-info">Auto-refresh every 3 seconds</div>
   </div>
@@ -363,48 +223,6 @@ app.get('/qr-view', (_req, res) => {
   <script>
     let intervalId;
     let isConnected = false;
-    let currentRotation = 180; // Start with 180deg since that's the common issue
-    
-    function rotateQR() {
-      const imgEl = document.getElementById('img');
-      currentRotation = (currentRotation + 90) % 360;
-      imgEl.style.transform = \`rotate(\${currentRotation}deg)\`;
-      console.log('QR rotated to:', currentRotation + 'deg');
-    }
-    
-    async function resetSession() {
-      if (!confirm('Reset WhatsApp session? This will clear all connection data and generate a new QR code.')) {
-        return;
-      }
-      
-      const statusEl = document.getElementById('status');
-      statusEl.textContent = '🔥 Resetting session...';
-      statusEl.className = 'waiting';
-      document.getElementById('qr-container').style.display = 'none';
-      document.getElementById('instructions').style.display = 'none';
-      
-      try {
-        const response = await fetch('/reset-session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        
-        if (response.ok) {
-          statusEl.textContent = '✅ Session reset! New QR will appear in a few seconds...';
-          // Resume polling for new QR
-          if (!intervalId && !isConnected) {
-            intervalId = setInterval(tick, 3000);
-          }
-        } else {
-          statusEl.textContent = '❌ Reset failed. Check server logs.';
-          statusEl.className = 'error';
-        }
-      } catch (e) {
-        console.error('Reset failed:', e);
-        statusEl.textContent = '❌ Reset request failed: ' + e.message;
-        statusEl.className = 'error';
-      }
-    }
     
     async function tick(){
       try{
@@ -421,18 +239,14 @@ app.get('/qr-view', (_req, res) => {
         document.getElementById('meta').textContent = lines;
         
         const statusEl = document.getElementById('status');
-        const qrContainer = document.getElementById('qr-container');
-        const instructions = document.getElementById('instructions');
-        const controls = document.getElementById('qr-controls');
+        const imgEl = document.getElementById('img');
         
         // Handle different connection states
         if (st.status === 'connected') {
           if (!isConnected) {
             statusEl.textContent = '✅ WhatsApp is connected and ready!';
             statusEl.className = 'connected';
-            qrContainer.style.display = 'none';
-            instructions.style.display = 'none';
-            controls.style.display = 'none';
+            imgEl.style.display = 'none';
             isConnected = true;
             
             // Stop polling after connection
@@ -444,23 +258,17 @@ app.get('/qr-view', (_req, res) => {
           }
           return;
         } else if (st.status === 'error' || st.status === 'failed') {
-          statusEl.textContent = '❌ Connection failed. Check logs or try Reset Session.';
+          statusEl.textContent = '❌ Connection failed. Check logs for details.';
           statusEl.className = 'error';
-          qrContainer.style.display = 'none';
-          instructions.style.display = 'none';
-          controls.style.display = 'block';
+          imgEl.style.display = 'none';
         } else if (st.hasQR) {
-          statusEl.textContent = '📱 Ready to scan QR code';
-          statusEl.className = 'waiting';
-          qrContainer.style.display = 'flex';
-          controls.style.display = 'block';
-          instructions.style.display = 'block';
+          statusEl.textContent = '📱 Open WhatsApp → Linked devices → Link a device and scan the code';
+          statusEl.className = '';
+          imgEl.style.display = 'block';
         } else {
-          statusEl.textContent = '⏳ Generating QR code...';
-          statusEl.className = 'waiting';
-          qrContainer.style.display = 'none';
-          controls.style.display = 'block';
-          instructions.style.display = 'none';
+          statusEl.textContent = '⏳ Waiting for QR code...';
+          statusEl.className = '';
+          imgEl.style.display = 'none';
         }
         
         isConnected = false;
@@ -476,21 +284,16 @@ app.get('/qr-view', (_req, res) => {
           const r = await fetch('/qr.png?ts=' + Date.now(), {cache:'no-store'});
           const imgEl = document.getElementById('img');
           if (r.ok) {
-            // Force reload with timestamp to prevent caching issues
-            const timestamp = Date.now();
-            imgEl.src = '';  // Clear first
-            setTimeout(() => {
-              imgEl.src = \`/qr.png?v=\${timestamp}\`;
-              imgEl.style.transform = \`rotate(\${currentRotation}deg)\`; // Apply current rotation
-              imgEl.onload = function() {
-                document.getElementById('qr-container').style.display = 'flex';
-                console.log('QR loaded successfully');
-              };
-              imgEl.onerror = function() {
-                console.error('QR image failed to load');
-                document.getElementById('qr-container').style.display = 'none';
-              };
-            }, 100);
+            // Create a new image to ensure proper loading
+            const newImg = new Image();
+            newImg.onload = function() {
+              imgEl.src = this.src;
+              document.getElementById('qr-container').style.display = 'flex';
+            };
+            newImg.onerror = function() {
+              document.getElementById('qr-container').style.display = 'none';
+            };
+            newImg.src = '/qr.png?ts=' + Date.now();
           } else {
             document.getElementById('qr-container').style.display = 'none';
           }
@@ -535,7 +338,8 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ---------- Enhanced Supabase helper ----------
-async function callSupabaseFunction(fn, data, retries = 3) {
+async function callSupabaseFunction(fn, data, retries) {
+  retries = retries || 3;
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     console.warn(`Supabase not configured, skipping ${fn}`);
     return { ok: true, skipped: true };
@@ -627,96 +431,37 @@ function initializeVenom() {
       '--no-first-run',
       '--no-zygote',
       '--single-process',
-      '--disable-gpu',
-      '--disable-web-security',
-      '--disable-features=VizDisplayCompositor',
-      '--force-device-scale-factor=1',
-      '--high-dpi-support=1',
-      '--disable-smooth-scrolling',
-      '--disable-extensions',
-      '--disable-plugins',
-      '--disable-images=false',
-      '--enable-logging',
-      '--ignore-certificate-errors',
-      '--ignore-ssl-errors',
-      '--ignore-certificate-errors-spki-list'
+      '--disable-gpu'
     ],
-    puppeteerOptions: { 
-      executablePath: PUP_EXEC_PATH,
-      args: [
-        '--no-sandbox', 
-        '--disable-setuid-sandbox',
-        '--force-device-scale-factor=1',
-        '--disable-font-subpixel-positioning'
-      ],
-      defaultViewport: {
-        width: 800,
-        height: 600,
-        deviceScaleFactor: 1,
-        isMobile: false,
-        hasTouch: false
-      }
-    },
+    puppeteerOptions: { executablePath: PUP_EXEC_PATH },
     catchQR: onQR,
     qrCallback: onQR,
-    statusCallback: function (statusSession, session) {
-      console.log('Venom status:', statusSession, session ? 'Session: ' + session : '');
+    statusCallback: function (statusSession) {
+      console.log('Venom status:', statusSession);
       
       switch(statusSession) {
         case 'isLogged':
           connectionStatus = 'connected';
           qrBase64 = null;
           isReady = true;
-          reconnectAttempts = 0;
+          reconnectAttempts = 0; // Reset on successful connection
           lastError = null;
-          console.log('✅ WhatsApp connected successfully!');
           break;
         case 'notLogged':
           connectionStatus = 'disconnected';
           isReady = false;
-          console.log('❌ Not logged in to WhatsApp');
           break;
         case 'qrReadSuccess':
           connectionStatus = 'connecting';
-          console.log('📱 QR code scanned, connecting...');
-          break;
-        case 'qrReadFail':
-          connectionStatus = 'qr_failed';
-          lastError = 'QR scan failed - please try again';
-          console.log('❌ QR scan failed');
-          break;
-        case 'autocloseCalled':
-          connectionStatus = 'disconnected';
-          isReady = false;
-          console.log('🔄 Auto-close called, reconnecting...');
-          break;
-        case 'desconnectedMobile':
-          connectionStatus = 'mobile_disconnected';
-          isReady = false;
-          lastError = 'Phone disconnected from internet';
-          console.log('📵 Mobile phone disconnected');
-          break;
-        case 'deleteToken':
-          connectionStatus = 'token_deleted';
-          isReady = false;
-          lastError = 'Session token deleted';
-          console.log('🗑️ Session token deleted');
           break;
         case 'browserClose':
           connectionStatus = 'disconnected';
           isReady = false;
-          console.log('🌐 Browser closed');
           if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            console.log('Browser closed, scheduling reconnect...');
             scheduleReconnect();
           }
           break;
-        case 'qrReadError':
-          connectionStatus = 'qr_error';
-          lastError = 'QR code read error';
-          console.log('❌ QR code read error');
-          break;
-        default:
-          console.log('ℹ️ Unknown status:', statusSession);
       }
     }
   })
